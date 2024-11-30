@@ -1,16 +1,38 @@
-# OpenAI Zig Client
+# zig-ai
 
-A simple, efficient Zig client for the OpenAI API. Supports chat completions with both streaming and non-streaming responses.
+A simple OpenAI API client for Zig with streaming support.
 
-## Features
-
-- 🚀 Chat completions API support
-- 📡 Streaming responses
-- 🔑 API key management via environment variables or explicit configuration
-- 🧩 Simple, idiomatic Zig interface
+Find examples in the `examples` directory.
 
 ## Installation
 
-```sh
+```bash
 $ zig fetch --save git+https://github.com/FOLLGAD/zig-ai
 ```
+
+and add `zig-ai` to your `build.zig` file:
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const exe = b.addExecutable(.{
+        .name = "stream-cli",
+        .root_source_file = b.path("examples/stream-cli.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const module = b.dependency("zig-ai", .{
+        .root_source_file = b.path("src/llm.zig"),
+    });
+    exe.root_module.addImport("zig-ai", module.module("zig-ai"));
+}
+```
+
+## Usage
+
+See the `examples` directory for usage examples.
