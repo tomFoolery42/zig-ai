@@ -6,17 +6,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Get API key from environment
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-
-    const api_key = env.get("OPENAI_API_KEY") orelse {
-        std.debug.print("OPENAI_API_KEY environment variable not set\n", .{});
-        return;
-    };
-
     // Initialize OpenAI client
-    var openai = try OpenAI.Client.init(allocator, api_key, null);
+    var openai = try OpenAI.Client.init(allocator, null, null);
 
     const stdin = std.io.getStdIn().reader();
     var buf_reader = std.io.bufferedReader(stdin);
@@ -52,21 +43,26 @@ pub fn main() !void {
                 .temperature = 0.2,
             };
 
-            const parsedCompletion = try openai.chat(payload, true);
-            defer parsedCompletion.deinit();
-            const completion = parsedCompletion.value;
+            var stream = try openai.streamChat(payload, false);
+            defer stream.deinit();
+            var responseString: []const u8 = "";
+            while (try stream.next()) |response| {
+                if (response.choices[0].delta.content) |content| {
+                    try writer.writeAll(content);
+                    try buf_writer.flush();
+                    responseString = try std.fmt.allocPrint(allocator, "{s}{s}", .{ responseString, content });
+                }
+            }
+
+            writer.writeAll("\n") catch unreachable;
+            buf_writer.flush() catch unreachable;
 
             try messages.append(
                 OpenAI.Message{
                     .role = "assistant",
-                    .content = try allocator.dupe(u8, completion.choices[0].message.content),
+                    .content = responseString,
                 },
             );
-
-            if (completion.choices.len > 0) {
-                try writer.print("{s}\n", .{completion.choices[0].message.content});
-                try buf_writer.flush();
-            }
         } else {
             break; // EOF reached
         }

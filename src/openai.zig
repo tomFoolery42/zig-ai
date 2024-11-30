@@ -21,13 +21,13 @@ pub const ChatResponse = struct {
     usage: Usage,
 };
 
+pub const DeltaChoice = struct { index: usize, delta: struct { role: ?[]const u8 = null, content: ?[]const u8 = null } };
 pub const StreamResponse = struct {
     id: []const u8,
     object: []const u8,
     created: u64,
     model: []const u8,
-    choices: []Choice,
-    usage: Usage,
+    choices: []DeltaChoice,
 };
 
 pub const Message = struct {
@@ -63,9 +63,9 @@ const StreamReader = struct {
         self.request.deinit();
     }
 
-    // Read the next JSON response from the stream
     pub fn next(self: *StreamReader) !?StreamResponse {
         const line = (try self.request.reader().readUntilDelimiterOrEof(&self.buffer, '\n')) orelse return null;
+        try self.request.reader().skipBytes(1, .{}); // Skip second newline
 
         if (line.len == 0) return null;
 
@@ -73,10 +73,8 @@ const StreamReader = struct {
         if (std.mem.startsWith(u8, line, "data: ")) {
             const data = line["data: ".len..];
 
-            // Skip heartbeat
             if (std.mem.eql(u8, data, "[DONE]")) return null;
 
-            // Parse the JSON data
             const parsed = try std.json.parseFromSlice(StreamResponse, self.alloc, data, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 
             return parsed.value;
@@ -122,8 +120,13 @@ pub const Client = struct {
     alloc: Allocator,
     http_client: std.http.Client,
 
-    pub fn init(alloc: Allocator, api_key: []const u8, organization_id: ?[]const u8) !Client {
-        return Client{ .alloc = alloc, .api_key = api_key, .organization_id = organization_id, .http_client = std.http.Client{ .allocator = alloc } };
+    pub fn init(alloc: Allocator, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
+        var env = try std.process.getEnvMap(alloc);
+        defer env.deinit(); // Safe to deinit env here
+        const _api_key = api_key orelse env.get("OPENAI_API_KEY") orelse return error.MissingAPIKey;
+        const openai_api_key = try alloc.dupe(u8, _api_key);
+
+        return Client{ .alloc = alloc, .api_key = openai_api_key, .organization_id = organization_id, .http_client = std.http.Client{ .allocator = alloc } };
     }
 
     fn get_headers(alloc: std.mem.Allocator, api_key: []const u8) !std.http.Client.Request.Headers {
@@ -190,5 +193,13 @@ pub const Client = struct {
         const parsed = try std.json.parseFromSlice(ChatResponse, self.alloc, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 
         return parsed;
+    }
+
+    pub fn deinit(self: *Client) void {
+        self.alloc.free(self.api_key);
+        if (self.organization_id) |org_id| {
+            self.alloc.free(org_id);
+        }
+        self.http_client.deinit();
     }
 };
