@@ -1,5 +1,5 @@
 const std = @import("std");
-const OpenAI = @import("openai.zig");
+const OpenAI = @import("zig-ai");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
