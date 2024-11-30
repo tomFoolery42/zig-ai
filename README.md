@@ -2,7 +2,7 @@
 
 A simple OpenAI API client for Zig with streaming support.
 
-Find examples in the `examples` directory.
+Find examples in the [`examples`](./examples) directory.
 
 ## Installation
 
