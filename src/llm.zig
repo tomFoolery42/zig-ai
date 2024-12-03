@@ -164,7 +164,9 @@ pub const Client = struct {
 
         var buf: [16 * 1024]u8 = undefined;
 
-        const uri = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base_url, endpoint });
+        const path = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base_url, endpoint });
+        const uri = try std.Uri.parse(path);
+
         var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf });
 
         req.transfer_encoding = .{ .content_length = body.len };
