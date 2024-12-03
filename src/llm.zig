@@ -87,28 +87,28 @@ const StreamReader = struct {
 pub const ChatPayload = struct { model: []const u8, messages: []Message, max_tokens: ?u32, temperature: ?f32 };
 
 const OpenAIError = error{
-    BAD_REQUEST,
-    UNAUTHORIZED,
-    FORBIDDEN,
-    NOT_FOUND,
-    TOO_MANY_REQUESTS,
-    INTERNAL_SERVER_ERROR,
-    SERVICE_UNAVAILABLE,
-    GATEWAY_TIMEOUT,
-    UNKNOWN,
+    BadRequest,
+    Unauthorized,
+    Forbidden,
+    NotFound,
+    TooManyRequests,
+    InternalServerError,
+    ServiceUnavailable,
+    GatewayTimeout,
+    Unknown,
 };
 
 fn getError(status: std.http.Status) OpenAIError {
     const result = switch (status) {
-        .bad_request => OpenAIError.BAD_REQUEST,
-        .unauthorized => OpenAIError.UNAUTHORIZED,
-        .forbidden => OpenAIError.FORBIDDEN,
-        .not_found => OpenAIError.NOT_FOUND,
-        .too_many_requests => OpenAIError.TOO_MANY_REQUESTS,
-        .internal_server_error => OpenAIError.INTERNAL_SERVER_ERROR,
-        .service_unavailable => OpenAIError.SERVICE_UNAVAILABLE,
-        .gateway_timeout => OpenAIError.GATEWAY_TIMEOUT,
-        else => OpenAIError.UNKNOWN,
+        .bad_request => OpenAIError.BadRequest,
+        .unauthorized => OpenAIError.Unauthorized,
+        .forbidden => OpenAIError.Forbidden,
+        .not_found => OpenAIError.NotFound,
+        .too_many_requests => OpenAIError.TooManyRequests,
+        .internal_server_error => OpenAIError.InternalServerError,
+        .service_unavailable => OpenAIError.ServiceUnavailable,
+        .gateway_timeout => OpenAIError.GatewayTimeout,
+        else => OpenAIError.Unknown,
     };
     return result;
 }
