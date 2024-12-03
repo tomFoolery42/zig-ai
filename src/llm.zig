@@ -140,13 +140,30 @@ pub const Client = struct {
     allocator: Allocator,
     http_client: std.http.Client,
 
+    arena: std.heap.ArenaAllocator,
+
     pub fn init(allocator: Allocator, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
         var env = try std.process.getEnvMap(allocator);
         defer env.deinit();
         const _api_key = api_key orelse env.get("OPENAI_API_KEY") orelse return error.MissingAPIKey;
         const openai_api_key = try allocator.dupe(u8, _api_key);
 
-        return Client{ .allocator = allocator, .api_key = openai_api_key, .organization_id = organization_id, .http_client = std.http.Client{ .allocator = allocator } };
+        var arena = std.heap.ArenaAllocator.init(allocator); // Initialize arena
+        errdefer arena.deinit(); // Ensure arena is deinitialized on error
+
+        var http_client = std.http.Client{ .allocator = allocator };
+        http_client.initDefaultProxies(arena.allocator()) catch |err| {
+            http_client.deinit();
+            return err;
+        };
+
+        return Client{
+            .allocator = allocator,
+            .api_key = openai_api_key,
+            .organization_id = organization_id,
+            .http_client = http_client,
+            .arena = arena,
+        };
     }
 
     fn get_headers(alloc: std.mem.Allocator, api_key: []const u8) !std.http.Client.Request.Headers {
@@ -165,9 +182,11 @@ pub const Client = struct {
         var buf: [16 * 1024]u8 = undefined;
 
         const path = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base_url, endpoint });
+        defer self.allocator.free(path);
         const uri = try std.Uri.parse(path);
 
         var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf });
+        errdefer req.deinit();
 
         req.transfer_encoding = .{ .content_length = body.len };
 
@@ -196,8 +215,9 @@ pub const Client = struct {
         var req = try self.makeCall("/chat/completions", body, verbose);
 
         if (req.response.status != .ok) {
-            defer req.deinit();
-            return getError(req.response.status);
+            const err = getError(req.response.status);
+            req.deinit();
+            return err;
         }
 
         return StreamReader.init(req);
@@ -219,8 +239,9 @@ pub const Client = struct {
         defer req.deinit();
 
         if (req.response.status != .ok) {
-            defer req.deinit();
-            return getError(req.response.status);
+            const err = getError(req.response.status);
+            req.deinit();
+            return err;
         }
 
         const response = try req.reader().readAllAlloc(self.allocator, 1024 * 8);
@@ -237,5 +258,6 @@ pub const Client = struct {
             self.allocator.free(org_id);
         }
         self.http_client.deinit();
+        self.arena.deinit();
     }
 };
