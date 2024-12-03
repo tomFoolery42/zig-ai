@@ -30,9 +30,28 @@ pub const StreamResponse = struct {
     choices: []DeltaChoice,
 };
 
+pub const Role = struct {
+    pub const system = "system";
+    pub const user = "user";
+    pub const assistant = "assistant";
+};
+
 pub const Message = struct {
     role: []const u8,
     content: []const u8,
+
+    // Add convenience constructors
+    pub fn system(content: []const u8) Message {
+        return .{ .role = Role.system, .content = content };
+    }
+
+    pub fn user(content: []const u8) Message {
+        return .{ .role = Role.user, .content = content };
+    }
+
+    pub fn assistant(content: []const u8) Message {
+        return .{ .role = Role.assistant, .content = content };
+    }
 };
 
 pub const Model = struct {
@@ -48,18 +67,19 @@ pub const ModelResponse = struct {
 };
 
 const StreamReader = struct {
-    alloc: Allocator,
+    arena: std.heap.ArenaAllocator,
     request: std.http.Client.Request,
     buffer: [2048]u8 = undefined,
 
-    pub fn init(alloc: Allocator, request: std.http.Client.Request) StreamReader {
+    pub fn init(request: std.http.Client.Request) !StreamReader {
         return .{
-            .alloc = alloc,
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .request = request,
         };
     }
 
     pub fn deinit(self: *StreamReader) void {
+        self.arena.deinit();
         self.request.deinit();
     }
 
@@ -75,7 +95,7 @@ const StreamReader = struct {
 
             if (std.mem.eql(u8, data, "[DONE]")) return null;
 
-            const parsed = try std.json.parseFromSlice(StreamResponse, self.alloc, data, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+            const parsed = try std.json.parseFromSlice(StreamResponse, self.arena.allocator(), data, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 
             return parsed.value;
         }
@@ -117,16 +137,16 @@ pub const Client = struct {
     base_url: []const u8 = "https://api.openai.com/v1",
     api_key: []const u8,
     organization_id: ?[]const u8,
-    alloc: Allocator,
+    allocator: Allocator,
     http_client: std.http.Client,
 
-    pub fn init(alloc: Allocator, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
-        var env = try std.process.getEnvMap(alloc);
-        defer env.deinit(); // Safe to deinit env here
+    pub fn init(allocator: Allocator, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
+        var env = try std.process.getEnvMap(allocator);
+        defer env.deinit();
         const _api_key = api_key orelse env.get("OPENAI_API_KEY") orelse return error.MissingAPIKey;
-        const openai_api_key = try alloc.dupe(u8, _api_key);
+        const openai_api_key = try allocator.dupe(u8, _api_key);
 
-        return Client{ .alloc = alloc, .api_key = openai_api_key, .organization_id = organization_id, .http_client = std.http.Client{ .allocator = alloc } };
+        return Client{ .allocator = allocator, .api_key = openai_api_key, .organization_id = organization_id, .http_client = std.http.Client{ .allocator = allocator } };
     }
 
     fn get_headers(alloc: std.mem.Allocator, api_key: []const u8) !std.http.Client.Request.Headers {
@@ -138,11 +158,13 @@ pub const Client = struct {
         return headers;
     }
 
-    fn makeCall(self: *Client, uri: std.Uri, body: []const u8, _: bool) !std.http.Client.Request {
-        const headers = try get_headers(self.alloc, self.api_key);
-        defer self.alloc.free(headers.authorization.override);
+    fn makeCall(self: *Client, endpoint: []const u8, body: []const u8, _: bool) !std.http.Client.Request {
+        const headers = try get_headers(self.allocator, self.api_key);
+        defer self.allocator.free(headers.authorization.override);
 
         var buf: [16 * 1024]u8 = undefined;
+
+        const uri = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base_url, endpoint });
         var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf });
 
         req.transfer_encoding = .{ .content_length = body.len };
@@ -155,9 +177,10 @@ pub const Client = struct {
         return req;
     }
 
+    /// Makes a streaming chat completion request to the OpenAI API.
+    /// Returns a StreamReader that can be used to read the response chunks.
+    /// Caller must call deinit() on the returned StreamReader when done.
     pub fn streamChat(self: *Client, payload: ChatPayload, verbose: bool) !StreamReader {
-        const uri = std.Uri.parse("https://api.openai.com/v1/chat/completions") catch unreachable;
-
         const options = .{
             .model = payload.model,
             .messages = payload.messages,
@@ -165,40 +188,51 @@ pub const Client = struct {
             .temperature = payload.temperature,
             .stream = true,
         };
-        const body = try std.json.stringifyAlloc(self.alloc, options, .{});
-        defer self.alloc.free(body);
+        const body = try std.json.stringifyAlloc(self.allocator, options, .{});
+        defer self.allocator.free(body);
 
-        var req = try self.makeCall(uri, body, verbose);
+        var req = try self.makeCall("/chat/completions", body, verbose);
 
         if (req.response.status != .ok) {
             defer req.deinit();
             return getError(req.response.status);
         }
 
-        return StreamReader.init(self.alloc, req);
+        return StreamReader.init(req);
     }
 
+    /// Makes a chat completion request to the OpenAI API.
+    /// Caller owns the returned memory and must call deinit() on the result.
     pub fn chat(self: *Client, payload: ChatPayload, verbose: bool) !std.json.Parsed(ChatResponse) {
-        const uri = std.Uri.parse("https://api.openai.com/v1/chat/completions") catch unreachable;
+        const options = .{
+            .model = payload.model,
+            .messages = payload.messages,
+            .max_tokens = payload.max_tokens,
+            .temperature = payload.temperature,
+        };
+        const body = try std.json.stringifyAlloc(self.allocator, options, .{ .whitespace = .indent_2 });
+        defer self.allocator.free(body);
 
-        const body = try std.json.stringifyAlloc(self.alloc, payload, .{ .whitespace = .indent_2 });
-        defer self.alloc.free(body);
-
-        var req = try self.makeCall(uri, body, verbose);
+        var req = try self.makeCall("/chat/completions", body, verbose);
         defer req.deinit();
 
-        const response = try req.reader().readAllAlloc(self.alloc, 1024 * 8);
-        defer self.alloc.free(response);
+        if (req.response.status != .ok) {
+            defer req.deinit();
+            return getError(req.response.status);
+        }
 
-        const parsed = try std.json.parseFromSlice(ChatResponse, self.alloc, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+        const response = try req.reader().readAllAlloc(self.allocator, 1024 * 8);
+        defer self.allocator.free(response);
+
+        const parsed = try std.json.parseFromSlice(ChatResponse, self.allocator, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
 
         return parsed;
     }
 
     pub fn deinit(self: *Client) void {
-        self.alloc.free(self.api_key);
+        self.allocator.free(self.api_key);
         if (self.organization_id) |org_id| {
-            self.alloc.free(org_id);
+            self.allocator.free(org_id);
         }
         self.http_client.deinit();
     }
