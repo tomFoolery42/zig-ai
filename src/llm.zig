@@ -106,6 +106,8 @@ const StreamReader = struct {
 
 pub const ChatPayload = struct { model: []const u8, messages: []Message, max_tokens: ?u32, temperature: ?f32 };
 
+pub const TtsPayload = struct { model: []const u8, text: []Message };
+
 const OpenAIError = error{
     BadRequest,
     Unauthorized,
@@ -134,7 +136,7 @@ fn getError(status: std.http.Status) OpenAIError {
 }
 
 pub const Client = struct {
-    base_url: []const u8 = "https://api.openai.com/v1",
+    base_url: []const u8,
     api_key: []const u8,
     organization_id: ?[]const u8,
     allocator: Allocator,
@@ -142,11 +144,13 @@ pub const Client = struct {
 
     arena: std.heap.ArenaAllocator,
 
-    pub fn init(allocator: Allocator, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
+    pub fn init(allocator: Allocator, base_url: ?[]const u8, api_key: ?[]const u8, organization_id: ?[]const u8) !Client {
         var env = try std.process.getEnvMap(allocator);
         defer env.deinit();
-        const _api_key = api_key orelse env.get("OPENAI_API_KEY") orelse return error.MissingAPIKey;
+        const _api_key = api_key orelse env.get("OPENAI_API_KEY") orelse "";
         const openai_api_key = try allocator.dupe(u8, _api_key);
+        const _url = base_url orelse "https://api.openai.com/v1";
+        const url = try allocator.dupe(u8, _url);
 
         var arena = std.heap.ArenaAllocator.init(allocator); // Initialize arena
         errdefer arena.deinit(); // Ensure arena is deinitialized on error
@@ -158,6 +162,7 @@ pub const Client = struct {
         };
 
         return Client{
+            .base_url = url,
             .allocator = allocator,
             .api_key = openai_api_key,
             .organization_id = organization_id,
@@ -185,7 +190,7 @@ pub const Client = struct {
         defer self.allocator.free(path);
         const uri = try std.Uri.parse(path);
 
-        var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf });
+        var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf, .keep_alive = false });
         errdefer req.deinit();
 
         req.transfer_encoding = .{ .content_length = body.len };
@@ -253,6 +258,7 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
+        self.allocator.free(self.base_url);
         self.allocator.free(self.api_key);
         if (self.organization_id) |org_id| {
             self.allocator.free(org_id);
@@ -260,4 +266,8 @@ pub const Client = struct {
         self.http_client.deinit();
         self.arena.deinit();
     }
+
+//    pub fn tts(self: *Client, payload: TtsPayload, verbose: bool) !std.json.Parsed(TtsResponse) {
+//
+//    }
 };

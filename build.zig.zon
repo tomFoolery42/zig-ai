@@ -1,5 +1,6 @@
 .{
-    .name = "zig-ai",
+    .name = .zig_ai,
+    .fingerprint = 0x6c0bf150c747e8e,
     .version = "0.0.3",
     .dependencies = .{},
     .paths = .{
