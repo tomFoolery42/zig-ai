@@ -1,3 +1,4 @@
+const base64 = std.base64;
 const std = @import("std");
 const meta = @import("std").meta;
 const log = std.log;
@@ -36,21 +37,105 @@ pub const Role = struct {
     pub const assistant = "assistant";
 };
 
-pub const Message = struct {
-    role: []const u8,
-    content: []const u8,
+pub const Image = struct {
+    const Content = struct {
+        @"type":    []const u8,
+        value:      []const u8,
+    };
 
-    // Add convenience constructors
-    pub fn system(content: []const u8) Message {
-        return .{ .role = Role.system, .content = content };
+    alloc:      Allocator,
+    role:       []const u8,
+    content:    []Content,
+
+    pub fn deinit(self: @This()) void {
+        self.alloc.free(self.content[1].value);
+        self.alloc.free(self.content);
+    }
+};
+
+pub const Text = struct {
+    role:       []const u8,
+    content:    []const u8,
+
+};
+
+pub const Message = union(enum) {
+    const Self = @This();
+    Text: Text,
+    Image: Image,
+
+    pub fn deinit(self: Self) void {
+        switch (self) {
+            .Image => |i| {
+                i.deinit();
+            },
+            else => {},
+        }
     }
 
-    pub fn user(content: []const u8) Message {
-        return .{ .role = Role.user, .content = content };
+    pub fn image(alloc: Allocator, prompt: []const u8, file: std.fs.File) !Self {
+        const image_data = try file.readToEndAlloc(alloc, (try file.stat()).size);
+        defer alloc.free(image_data);
+        const encoded_length: usize = @intCast(base64.standard.Encoder.calcSize(image_data.len));
+        const encoded = try alloc.alloc(u8, encoded_length);
+        _ = base64.standard.Encoder.encode(encoded, image_data);
+        const image_url = try std.fmt.allocPrint(alloc, "data:image/jpeg;base64,{s}", .{encoded});
+        const content_list = try alloc.alloc(Image.Content, 2);
+        content_list[0] = .{.type = "text", .value = prompt};
+        content_list[1] = .{.type = "image_url", .value = image_url};
+        return .{.Image = .{
+            .alloc = alloc,
+            .role = Role.user,
+            .content = content_list,
+        }};
     }
 
-    pub fn assistant(content: []const u8) Message {
-        return .{ .role = Role.assistant, .content = content };
+    pub fn user(content: []const u8) Self {
+        return .{.Text = .{
+            .role = Role.user,
+            .content = content,
+        }};
+    }
+
+    pub fn system(content: []const u8) Self {
+        return .{.Text = .{
+            .role = Role.system,
+            .content = content,
+        }};
+    }
+
+    pub fn jsonStringify(self: @This(), jws: anytype) !void {
+        try jws.beginObject();
+        switch (self) {
+            .Text => |text| {
+                try jws.objectField("role");
+                try jws.write(text.role);
+                try jws.objectField("content");
+                try jws.write(text.content);
+            },
+            .Image => |i| {
+                try jws.objectField("role");
+                try jws.write(Role.user);
+                try jws.objectField("content");
+                try jws.beginArray();
+                for (i.content) |next| {
+                    try jws.beginObject();
+                    try jws.objectField("type");
+                    try jws.write(next.type);
+                    if (std.mem.eql(u8, next.type, "text")) {
+                        try jws.objectField("text");
+                        try jws.write(next.value);
+                    }
+                    else {
+                        try jws.objectField("image_url");
+                        try jws.write(next.value);
+                    }
+                    try jws.endObject();
+                }
+                try jws.endArray();
+            },
+        }
+        try jws.endObject();
     }
 };
 
@@ -104,9 +189,7 @@ const StreamReader = struct {
     }
 };
 
-pub const ChatPayload = struct { model: []const u8, messages: []Message, max_tokens: ?u32, temperature: ?f32 };
-
-pub const TtsPayload = struct { model: []const u8, text: []Message };
+pub const ChatPayload = struct { model: []const u8, messages: []const Message, max_tokens: ?u32, temperature: ?f32 };
 
 const OpenAIError = error{
     BadRequest,
