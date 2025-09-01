@@ -78,6 +78,7 @@ pub const Message = union(enum) {
         defer alloc.free(image_data);
         const encoded_length: usize = @intCast(base64.standard.Encoder.calcSize(image_data.len));
         const encoded = try alloc.alloc(u8, encoded_length);
+        defer alloc.free(encoded);
         _ = base64.standard.Encoder.encode(encoded, image_data);
         const image_url = try std.fmt.allocPrint(alloc, "data:image/jpeg;base64,{s}", .{encoded});
         const content_list = try alloc.alloc(Image.Content, 2);
@@ -349,8 +350,4 @@ pub const Client = struct {
         self.http_client.deinit();
         self.arena.deinit();
     }
-
-//    pub fn tts(self: *Client, payload: TtsPayload, verbose: bool) !std.json.Parsed(TtsResponse) {
-//
-//    }
 };
