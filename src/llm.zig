@@ -268,21 +268,14 @@ pub const Client = struct {
         const headers = try get_headers(self.allocator, self.api_key);
         defer self.allocator.free(headers.authorization.override);
 
-        var buf: [16 * 1024]u8 = undefined;
-
         const path = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.base_url, endpoint });
         defer self.allocator.free(path);
         const uri = try std.Uri.parse(path);
 
-        var req = try self.http_client.open(.POST, uri, .{ .headers = headers, .server_header_buffer = &buf, .keep_alive = false });
-        errdefer req.deinit();
+        var req = try self.http_client.request(.POST, uri, .{ .keep_alive = false, .headers = headers});
 
-        req.transfer_encoding = .{ .content_length = body.len };
-
-        try req.send();
-        try req.writeAll(body);
-        try req.finish();
-        try req.wait();
+        req.transfer_encoding = .chunked;
+        try req.sendBodyComplete(@constCast(body));
 
         return req;
     }
@@ -321,19 +314,20 @@ pub const Client = struct {
             .max_tokens = payload.max_tokens,
             .temperature = payload.temperature,
         };
-        const body = try std.json.stringifyAlloc(self.allocator, options, .{ .whitespace = .indent_2 });
+        const body = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(options, .{})});
         defer self.allocator.free(body);
 
         var req = try self.makeCall("/chat/completions", body, verbose);
         defer req.deinit();
 
-        if (req.response.status != .ok) {
-            const err = getError(req.response.status);
+        var response_status = try req.receiveHead(&.{});
+        if (response_status.head.status != .ok) {
+            const err = getError(response_status.head.status);
             req.deinit();
             return err;
         }
 
-        const response = try req.reader().readAllAlloc(self.allocator, 1024 * 8);
+        const response = try response_status.reader(&.{}).allocRemaining(self.allocator, .unlimited);
         defer self.allocator.free(response);
 
         const parsed = try std.json.parseFromSlice(ChatResponse, self.allocator, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
