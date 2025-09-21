@@ -239,7 +239,7 @@ pub const Client = struct {
         var arena = std.heap.ArenaAllocator.init(allocator); // Initialize arena
         errdefer arena.deinit(); // Ensure arena is deinitialized on error
 
-        var http_client = std.http.Client{ .allocator = allocator };
+        var http_client = std.http.Client{ .allocator = allocator, .write_buffer_size = 8192 };
         http_client.initDefaultProxies(arena.allocator()) catch |err| {
             http_client.deinit();
             return err;
@@ -272,7 +272,7 @@ pub const Client = struct {
         defer self.allocator.free(path);
         const uri = try std.Uri.parse(path);
 
-        var req = try self.http_client.request(.POST, uri, .{ .keep_alive = false, .headers = headers});
+        var req = try self.http_client.request(.POST, uri, .{ .keep_alive = true, .headers = headers});
 
         req.transfer_encoding = .chunked;
         try req.sendBodyComplete(@constCast(body));
@@ -330,9 +330,7 @@ pub const Client = struct {
         const response = try response_status.reader(&.{}).allocRemaining(self.allocator, .unlimited);
         defer self.allocator.free(response);
 
-        const parsed = try std.json.parseFromSlice(ChatResponse, self.allocator, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
-
-        return parsed;
+        return try std.json.parseFromSlice(ChatResponse, self.allocator, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
     }
 
     pub fn deinit(self: *Client) void {
