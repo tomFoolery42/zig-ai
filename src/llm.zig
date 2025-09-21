@@ -272,9 +272,7 @@ pub const Client = struct {
         defer self.allocator.free(path);
         const uri = try std.Uri.parse(path);
 
-        var req = try self.http_client.request(.POST, uri, .{ .keep_alive = true, .headers = headers});
-
-        req.transfer_encoding = .chunked;
+        var req = try self.http_client.request(.POST, uri, .{ .keep_alive = false, .headers = headers});
         try req.sendBodyComplete(@constCast(body));
 
         return req;
@@ -320,7 +318,8 @@ pub const Client = struct {
         var req = try self.makeCall("/chat/completions", body, verbose);
         defer req.deinit();
 
-        var response_status = try req.receiveHead(&.{});
+        var buff: [1024 * 8]u8 = undefined;
+        var response_status = try req.receiveHead(&buff);
         if (response_status.head.status != .ok) {
             const err = getError(response_status.head.status);
             req.deinit();
