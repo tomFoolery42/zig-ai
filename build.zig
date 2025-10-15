@@ -5,10 +5,13 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const module = b.addModule("zig-ai", .{
-        .root_source_file = b.path("src/llm.zig"),
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    const websocket = b.dependency("websocket", .{});
+    module.addImport("websocket", websocket.module("websocket"));
 
     const stream_module = b.addModule("stream-cli", .{
         .root_source_file = b.path("examples/stream-cli.zig"),
