@@ -47,7 +47,9 @@ pub fn imageGenerate(self: *Self, json: String, args: anytype) !Image {
 
     try self.imageQueue(json, client_id);
 
-    return try self.imageGet(client_id);
+    try self.imageWait(client_id);
+
+    return self.imageGet(client_id);
 }
 
 pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
@@ -58,7 +60,6 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
 
     const tmp = try std.fmt.allocPrint(self.alloc, "{{ \"prompt\": {s}, \"client_id\": \"{s}\" }}", .{json, client_id});
     defer self.alloc.free(tmp);
-    std.debug.print("json: {s}", .{tmp});
 
     var req = try self.client.request(.POST, uri, .{ .keep_alive = false, .headers = headers});
     try req.sendBodyComplete(@constCast(tmp));
@@ -67,7 +68,7 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
     var buff: [1024 * 8]u8 = undefined;
     var response_status = try req.receiveHead(&buff);
     if (response_status.head.status != .ok) {
-        std.debug.print("bad status: {f}\n", .{std.json.fmt(response_status.head, .{})});
+        std.debug.print("{d} bad status: {f}\n", .{response_status.head.status, std.json.fmt(response_status.head, .{})});
         return Errors.BadRequest;
     }
 
@@ -80,9 +81,35 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
 //    return @intCast(raw.value.object.get("prompt_id").?.integer);
 }
 
-pub fn imageGet(self: *Self, id: String) !Image {
+pub fn imageGet(self: *Self, client_id: String) !Image {
+    const path = try std.fmt.allocPrint(self.alloc, "{s}/history/{s}", .{self.url, client_id});
+    defer self.alloc.free(path);
+    const uri = try std.Uri.parse(path);
+    const headers = try get_headers();
+
+    var req = try self.client.request(.GET, uri, .{ .keep_alive = false, .headers = headers});
+    try req.sendBodiless();
+    defer req.deinit();
+
+    var buff: [1024 * 8]u8 = undefined;
+    var response_status = try req.receiveHead(&buff);
+    if (response_status.head.status != .ok) {
+        std.debug.print("{d} bad status: {f}\n", .{response_status.head.status, std.json.fmt(response_status.head, .{})});
+        return Errors.BadRequest;
+    }
+
+    const response = try response_status.reader(&.{}).allocRemaining(self.alloc, .unlimited);
+    defer self.alloc.free(response);
+    const raw = try std.json.parseFromSlice(std.json.Value, self.alloc, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+    defer raw.deinit();
+    std.debug.print("history? {any}", .{raw.value});
+
+    return "not ready yet";
+}
+
+pub fn imageWait(self: *Self, id: String) !void {
     var waiting = true;
-    var websocket = try ws.Client.init(self.alloc, .{.port = 443, .host = "image.klein.home"});
+    var websocket = try ws.Client.init(self.alloc, .{.port = 443, .host = "image.klein.home", .tls = true});
     defer {
         websocket.close(.{}) catch {};
         websocket.deinit();
@@ -90,7 +117,7 @@ pub fn imageGet(self: *Self, id: String) !Image {
     // timeout is not what I think it is. Timeout for the handshake, not the connection
     const websocket_id = try std.fmt.allocPrint(self.alloc, "/ws?clientId={s}", .{id});
     defer self.alloc.free(websocket_id);
-    try websocket.handshake(websocket_id, .{.timeout_ms = 5000}); //, .headers = "Host: image.klein.home"});
+    try websocket.handshake(websocket_id, .{.timeout_ms = 5000, .headers = "Host: image.klein.home"});
     try websocket.readTimeout(std.time.ms_per_s * 15);
 
     while (waiting) {
@@ -98,7 +125,7 @@ pub fn imageGet(self: *Self, id: String) !Image {
             defer websocket.done(response);
             switch (response.type) {
                 .text, .binary => {
-                    std.log.info("response: {any}", .{response});
+                    std.debug.print("response: {s}\n", .{response.data});
                     waiting = false;
                 },
                 .ping => websocket.writePong(response.data) catch {},
@@ -110,6 +137,4 @@ pub fn imageGet(self: *Self, id: String) !Image {
             }
         }
     }
-
-    return "not implemented yet";
 }
