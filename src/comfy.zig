@@ -6,9 +6,29 @@ const Errors = error {
     BadRequest,
     WebsocketClosed,
 };
+const History = struct {
+    outputs:  struct {
+        finished_node: struct {
+            images: []struct{
+                filename: String,
+                subfolder: String,
+            },
+        },
+    },
+};
 const Image = String;
 const Self = @This();
 const String = []const u8;
+const WebsocketResponse = struct {
+    data: struct {
+        status:  struct {
+            exec_info: struct {
+                queue_remaining: i64
+            },
+        },
+        sid: String,
+    },
+};
 
 alloc:  Allocator,
 client: std.http.Client,
@@ -43,7 +63,7 @@ pub fn imageGenerate(self: *Self, json: String, args: anytype) !Image {
     _ = args;
     //const full_json = self.alloc.printAlloc();
     //defer self.alloc.free(full_json);
-    const client_id: String = "59800f37-6230-418b-bf2e-3403261fa889";
+    const client_id: String = "59800f37-6230-418b-bf2e-3403261fa898";
 
     try self.imageQueue(json, client_id);
 
@@ -82,7 +102,7 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
 }
 
 pub fn imageGet(self: *Self, client_id: String) !Image {
-    const path = try std.fmt.allocPrint(self.alloc, "{s}/history/{s}", .{self.url, client_id});
+    const path = try std.fmt.allocPrint(self.alloc, "{s}/history?clientId={s}&max_items=1", .{self.url, client_id});
     defer self.alloc.free(path);
     const uri = try std.Uri.parse(path);
     const headers = try get_headers();
@@ -100,9 +120,10 @@ pub fn imageGet(self: *Self, client_id: String) !Image {
 
     const response = try response_status.reader(&.{}).allocRemaining(self.alloc, .unlimited);
     defer self.alloc.free(response);
+    std.debug.print("raw: {s}\n", .{response});
     const raw = try std.json.parseFromSlice(std.json.Value, self.alloc, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
     defer raw.deinit();
-    std.debug.print("history? {any}", .{raw.value});
+    std.debug.print("history? {any}\n", .{raw.value});
 
     return "not ready yet";
 }
@@ -125,8 +146,15 @@ pub fn imageWait(self: *Self, id: String) !void {
             defer websocket.done(response);
             switch (response.type) {
                 .text, .binary => {
-                    std.debug.print("response: {s}\n", .{response.data});
-                    waiting = false;
+                    std.debug.print("raw: {s}\n", .{response.data});
+                    if (std.json.parseFromSlice(WebsocketResponse, self.alloc, response.data, .{.ignore_unknown_fields = true})) |parsed| {
+                        defer parsed.deinit();
+                        waiting = parsed.value.data.status.exec_info.queue_remaining != 0;
+                    }
+                    else |_| {
+                        std.debug.print("non-status message\n", .{});
+                    }
+                    std.debug.print("still waiting: {}\n", .{waiting});
                 },
                 .ping => websocket.writePong(response.data) catch {},
                 .pong => {},
