@@ -85,7 +85,7 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
     try req.sendBodyComplete(@constCast(tmp));
     defer req.deinit();
 
-    var buff: [1024 * 8]u8 = undefined;
+    var buff: [1024 * 16]u8 = undefined;
     var response_status = try req.receiveHead(&buff);
     if (response_status.head.status != .ok) {
         std.debug.print("{d} bad status: {f}\n", .{response_status.head.status, std.json.fmt(response_status.head, .{})});
@@ -96,9 +96,6 @@ pub fn imageQueue(self: *Self, json: String, client_id: String) !void {
     defer self.alloc.free(response);
     const raw = try std.json.parseFromSlice(std.json.Value, self.alloc, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
     defer raw.deinit();
-
-    std.debug.print("propt id: {any}\n", .{raw.value});
-//    return @intCast(raw.value.object.get("prompt_id").?.integer);
 }
 
 pub fn imageGet(self: *Self, client_id: String) !Image {
